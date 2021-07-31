@@ -1,0 +1,775 @@
+---
+title: "Big Data - Machine Learning - Neural network "
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+## Author: AMANDINE STL
+
+
+
+Loading the libraries needed for this project
+
+```{r, setup, include=FALSE}
+setwd('')
+#install.packages("Hmisc")
+#install.packages("softImpute")
+#install.packages("MASS")
+
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+library(cluster)
+library(ggplot2)
+library(FactoMineR)
+library(factoextra)
+library(corrplot)
+library(summarytools)
+library(Hmisc)
+library(softImpute)
+library(randomForest)
+library(ppls)
+library(caret)
+library(rpart)
+library(tree)
+library(MASS)
+library (ridge)
+library(car)
+library(glmnet)
+library(lars)
+```
+
+## Part 1
+
+Loading the data for this part and printing the head of our data set.
+There are 768 observations and 9 variables.
+
+```{r}
+#importing the data
+data = read.table("First_dataset.csv", sep = ",", header =  T)
+
+data$Outcome = as.factor(data$Outcome)
+dim(data)
+head(data)
+```
+
+
+
+Question 1 : Here we produce a statistical descriptive analysis (histograms, barplot and  PCA).
+Strange value could be interpret as missing value, as for Glucose and other variable it is quite strange that someone doesn't have a Glucose in his bodY.
+
+```{r, `echo = FALSE`}
+hist.data.frame(data[,1:dim(data)[2]]-1)
+
+```
+
+```{r}
+summary(data)
+```
+
+There are less sick people than health people.
+```{r}
+barplot(table(data$Outcome), col="blue", xlab = 'Outcome', ylab = 'Frequency')
+
+```
+
+PCA Analysis:
+
+```{r}
+PCA(data[,1:8], scale.unit = TRUE, ncp = 5)
+#here we normalise the data with using scale.unit = TRUE
+```
+
+Then we get the result of the function PCA and print it 
+```{r}
+res.pca <- PCA(data[,1:8], graph = FALSE)
+print(res.pca)
+```
+
+
+
+```{r}
+#To get the eigenvalue
+eig.val <- get_eigenvalue(res.pca)
+eig.val
+```
+
+
+Plot to see the percentage of explained variance of the first 9 of the principal componants; From this, we see that the 2 first planes have a high percentage of explained than others.
+```{r}
+fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50))
+
+```
+
+Hence, we represent our variables in the 2 first principal planes as follows.
+
+```{r}
+
+#var is the function that contains all the information of the PCA
+#(coordonnées, correlations btw variables and axes, cos2 et contributions)
+var <- get_pca_var(res.pca)
+
+
+# Colorer en fonction du cos2: qualité de représentation
+fviz_pca_var(res.pca, col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE # Évite le chevauchement de texte
+             )
+
+```
+
+From this figure, we realise that the variables that contribute the most(or the most important variables) are : Age, Pregnancies, skinthickness. The least important variable is DiabetesPedigreeFunction.
+
+
+
+Question 2 : To check if there is any correlation between 0's and the outcome variable, we create a table that will contains the number of zero, number of sick people and proportion  amount these 0 values for each of these variables.
+
+```{r}
+dataStrangeZero = data[,2:6]
+tableVar=data.frame(matrix(ncol = 3, nrow=length(colnames(dataStrangeZero))), row.names = colnames(dataStrangeZero))
+colnames(tableVar) = c("CountZero","CountSick", "sickProportion")
+i=1
+for (name in colnames(dataStrangeZero)) {
+  tableVar$CountZero[i]= length(dataStrangeZero[which(dataStrangeZero[,name] == 0),name])
+  tableVar$CountSick[i]= length(dataStrangeZero[which((dataStrangeZero[,name] == 0) & (data$Outcome == 1)),name])
+  tableVar$sickProportion[i]= tableVar$CountSick[i]/tableVar$CountZero[i]
+  i=i+1
+}
+
+head(tableVar)
+```
+From this table, we realise that amount the individual that have zeros value for these variables:
+-For the 'Glucose', only 2 of the 5  are sicks.
+-for 'SkinThickness', few of them are sick; 
+In general for all these variables, only few of the individual with 0 values are sick, so there is not really a correlation.
+
+
+
+Question 3 : Here we clean the data set using the 'softimput' method.
+We first fill the Na in our data set;
+```{r}
+dataStrangeZero = data[,2:6]
+for (name in colnames(dataStrangeZero)) {
+  data[which(data[,name] == 0),name] = NA
+}
+
+summary(data)   #to check if the NA appear now
+
+```
+
+Then, we use the softimput function to clean our data set.
+```{r}
+set.seed(567)
+#data$Outcome = as.numeric(data$Outcome)
+data = read.table("First_dataset.csv", sep = ",", header =  T)
+fits=softImpute(data,trace=TRUE,type="svd")
+#fits
+
+dataNew = complete(data,fits)
+summary(dataNew)                #chek if everything is fine
+```
+
+
+
+
+Question 4:  Produce an unsupervised classification of the dataset without the
+outcome variable. Then, represents the value of the outcome variable associated with the obtained clustering.
+```{r}
+sdf = dataNew[,1:7]      #All the variables without the outcome
+################################################################
+  print("scaling the data frame")
+  sdf <- scale(sdf)    #scaling the data frame
+  
+  
+  ################################################################
+  print("finding a good number of clusters")
+  set.seed(123)
+  
+  print(" Compute for k = 2 to k = 10")
+  
+  kMax <- 10
+  
+  print("computing the withinss for each value of k")
+  wss <- sapply(1:kMax, 
+                function(k){kmeans(sdf, k, nstart=50,iter.max = 10 )$tot.withinss})
+  
+  
+  ##############################################################
+  print("visualisation a good number of cluster k")
+  
+  print("Plot of within ss")
+  plot(1:kMax, wss,
+       type="b",col = "red",  pch = 19, frame = FALSE,
+       xlab="Number of clusters K",
+       ylab="Total within-clusters sum of squares")
+
+  
+  print("Computation of a good number of cluster ")
+
+```
+
+
+From this figure, we can take k=3 as the number of clusters
+```{r}
+set.seed(12)
+k=3
+kmeans.res <- kmeans(sdf, centers = k, nstart = 20, iter.max = 15)
+  
+  print("cluster plot for case1" )
+  fviz_cluster(kmeans.res, data = sdf,stand = FALSE, geom = "point",
+               pointsize = 1)
+
+```
+Description of the groups obtained; The code below help to find the size of each group.
+```{r}
+  list_cl1 = list()
+  size_cl1 = 1:k
+  for(i in 1:k){
+    
+    list_cl1[[i]]= which(kmeans.res$cluster == i)
+    size_cl1[i] = length(list_cl1[[i]])
+  } 
+  print("sizes of the clusters")
+  print(size_cl1)
+```
+
+Now, we create a table containing the size of each group, and for each group its proportion of sick and non sick people.
+
+```{r}
+  k=3
+  list_cl = list()
+  GroupeSize = 1:k
+  countSick = 1:k
+  proportionSick = 1:k
+  proportionNonSick = 1:k
+  for(i in 1:k){
+    g = which(kmeans.res$cluster == i)
+    list_cl[[i]]= g
+    GroupeSize[i] = length(list_cl[[i]])
+    dfg = dataNew[g,]
+    countSick[i] = length(which(dfg$Outcome ==1))
+    proportionSick[i] = countSick[i]/length(dfg$Outcome)
+    proportionNonSick[i] = 1-proportionSick[i] 
+  } 
+
+
+
+print(size_cl1)
+print(proportionSick)
+print(proportionNonSick)
+
+DescCluster = cbind.data.frame(GroupeSize,countSick, proportionSick,proportionNonSick)
+head(DescCluster)
+```
+
+The two first group have the same number of individual: 219; The third group has 330 people.
+From this, we realise that the first group have more people that are sick contary to the last group. Few people(0.14%) in the last group are sick. 
+
+
+
+Question 5 : Use the best algorithm you can find (in terms of accuracy) for
+supervised classification of the outcome variable.
+We use the random forest algorithm.
+
+```{r}
+set.seed(45)
+dataNew$Outcome = as.factor(dataNew$Outcome)      #run this only once
+rf=randomForest(Outcome~.,data=dataNew,
+do.trace=20,importance=TRUE,norm.vote=FALSE)
+print(rf)
+
+```
+It predict well people that are not sick from the confusion matrix.
+
+Question 6 : Provide an estimation of the misclassification rate of the whole
+process, from the cleaning step to the final prediction.
+
+
+```{r}
+pred_rf = predict(rf, newdata=dataNew, type="response")
+#pred_rf
+table(pred_rf, dataNew$Outcome)
+print(rf)
+```
+This rate is 24.48%.
+
+
+
+Question 7:  What are the meaningful variables for predicting the outcome
+variable ? To solve this we use the ANOVA test and choose the variable with the lowest p-value together with Outcome.
+
+
+```{r}
+library(randomForestSRC)
+
+dataNew.rfsrc <- rfsrc(Outcome ~ ., data = dataNew)
+
+# Permutation vimp
+print(vimp(dataNew.rfsrc)$importance)
+
+
+```
+
+
+From this looking at the columns ALL, the most important variables are the variable with the least values: DiabetesPedigreeFunction,Insulin ,BloodPressure, SkinThickness at 1% level
+Then we can add; Age, BMI and Pregnancies at 5% level.
+
+Another for finding the most important variable by computing the correlation coefficient between the outcome and others.
+
+```{r}
+
+aov1 = aov(Age ~ Outcome , data = dataNew)
+summary(aov1)
+
+aov2 = aov(Pregnancies ~ Outcome , data = dataNew)
+summary(aov2)
+
+aov3 = aov(Glucose ~ Outcome , data = dataNew)
+summary(aov3)
+
+
+aov3 = aov(BloodPressure ~ Outcome , data = dataNew)
+summary(aov3)
+
+
+aov4 = aov(SkinThickness ~ Outcome , data = dataNew)
+summary(aov4)
+
+
+aov5 = aov(Insulin ~ Outcome , data = dataNew)
+summary(aov5)
+
+aov6 = aov(BMI ~ Outcome , data = dataNew)
+summary(aov6)
+
+
+aov7 = aov(DiabetesPedigreeFunction ~ Outcome , data = dataNew)
+summary(aov7)
+
+
+```
+
+From this output, we realise that the most correlated variables to the Outcome at 1% level are the following:
+Age,Pregnancies, Glucose, Insulin, BMI and DiabetesPedigreeFunction.
+These are the most important variables to predict well the Outcome. 
+
+
+
+# # Part 2: Second dataset - high dimensional dataset
+
+
+
+
+loading the dataset
+```{r}
+data(cookie)
+# Extraction of the sugar rate and spectrum
+cook = data.frame(cookie[,702],cookie[,1:700])
+names(cook)= c("sucre",paste("X",1:700,sep=""))
+```
+
+Summary of the first 10 columns of the data set. This data set has 72 observations and 701 variables.
+```{r}
+
+summary(cook[1:10])
+
+dim(cook)
+```
+Printing a head of our data set.
+```{r}
+head(cook)
+```
+
+
+Question 8 : Warning : one observation seems to be an outlier (as pointed in
+the litterature). Why ? From these boxplots. The individual that are out of the box plots.
+
+On this box we realise that there are outliers. 
+
+```{r}
+boxplot(cook[1:5])
+
+```
+
+Without the sucre variable.
+```{r}
+boxplot(cook[2:5])
+
+```
+
+The outlier is the index(individual) with the highest value of the robust mahalanobis distance.
+
+```{r}
+require(rrcov)
+
+set.seed(45)
+mcd <- rrcov::CovMcd(t(cook)) # use only first three columns  
+# get mcd estimate of location
+mean_mcd <- mcd@raw.center
+# get mcd estimate scatter
+cov_mcd <- mcd@raw.cov
+
+# get inverse of scatter
+cov_mcd_inv <- solve(cov_mcd)
+
+# compute distances
+
+# compute the robust distance
+robust_dist <- apply(t(cook), 1, function(x){
+  x <- (x - mean_mcd)
+  dist <- sqrt((t(x)  %*% cov_mcd_inv %*% x))
+  return(dist)
+})
+
+robust_dist.t = t(robust_dist)
+# set cutoff using chi square distribution
+threshold <- sqrt(qchisq(p = 0.975, df = ncol(cook))) # df = no of columns
+
+# find outliers
+outliers <-  which(robust_dist >= threshold) 
+# gives the row numbers of outliers
+
+```
+One of the index of the outlier is the value of  'outliers' with respect the probability of the threshold.
+
+
+To solve the outlier problem, we normalise our data set using the following function.
+
+```{r}
+# MAX-MIN NORMALIZATION
+normalize <- function(x) {
+ return ((x - min(x)) / (max(x) - min(x)))
+}
+
+cookNorm <- as.data.frame(lapply(cook, normalize))
+```
+
+From now on, we will use the normalise data set: cookNorm.
+
+Question 9 : Create a training set and a test set to learn your algorithm and
+measure the efficiency of your method.
+```{r}
+set.seed(815351)
+
+inTrain <- createDataPartition(
+  y = cook$sucre,
+  #40/72 = 0.5556
+  p = 0.55,
+  list = FALSE
+)
+
+#create new data sets
+trainSet <- cook[inTrain,]
+testSet  <- cook[-inTrain,]
+
+```
+
+
+This method is good as our dimensions are near to one of the litterature.
+
+```{r}
+dim(trainSet)
+dim(testSet)
+```
+
+
+
+
+Question 10 : Use a ridge regression to learn the sugar rate, optimize the ridge
+regression with a suitable choice of the penalty parameter. Discuss on the quality of the model on the learning set and provide a prediction on the test set and a computation of the error. 
+
+We will use the glmnet() function .The glmnet() function has an alpha argument that determines what type of model is fit. If alpha = 0 then a ridge regression model is fit, and if alpha = 1 then a lasso model is fit.
+
+By default the glmnet() function performs ridge regression for an automatically selected range of  lambda values. However, here we have chosen to implement the function over a grid of values ranging from  lambda=10^10  to  lambda=10^???2 , essentially covering the full range of scenarios from the null model containing only the intercept, to the least squares fit.
+
+We define useful parameter for this function.
+
+```{r}
+grid = 10^seq(10, -2, length = 100)
+
+x_trainSet = model.matrix(sucre~., trainSet)[,-1]
+x_testSet = model.matrix(sucre~., testSet)[,-1]
+
+
+y_trainSet = trainSet$sucre
+y_testSet = testSet$sucre
+```
+Next we fit a ridge regression model on the training set, and evaluate its MSE on the test set, using  lambda=4 . Then we use the predict() function to get predictions for a test set, by replacing type="coefficients" with the newx argument.
+
+the error(MSE) for this model on the test set is 2.791172 for lambda = 4
+
+```{r}
+model.ridge = glmnet(x_trainSet, y_trainSet, alpha=0, lambda = grid, thresh = 1e-12)
+predict.ridge = predict(model.ridge, s = 4, newx = x_testSet)
+mean((predict.ridge - y_testSet)^2)       #3.398415
+```
+
+
+
+Instead of arbitrarily choosing  lambda=4 , it would be better to use cross-validation to choose the tuning parameter  lambda . We can do this using the built-in cross-validation function, cv.glmnet(). By default, the function performs 10-fold cross-validation, though this can be changed using the argument folds. Note that we set a random seed first so our results will be reproducible, since the choice of the cross-validation folds is random.
+
+
+```{r}
+set.seed(11)
+cv.out = cv.glmnet(x_trainSet, y_trainSet, alpha = 0) # Fit ridge regression model on training data
+bestlam = cv.out$lambda.min  # Select lamda that minimizes training MSE
+bestlam
+```
+
+
+Out best value of lambda is 24.8 so we can take 25.
+Draw plot of training MSE as a function of lambda.
+```{r}
+plot(cv.out) 
+```
+To see the quality of our model, let us look at some coefficients and its error.
+
+```{r}
+predict(model.ridge, type = "coefficients", s = bestlam)[1:20,]
+
+```
+Few of them are 0.
+
+Now, we look at the test MSE associated with this value of lambda
+
+```{r}
+set.seed(10)
+ridge_pred = predict(model.ridge, s = bestlam, newx = x_testSet) # Use best lambda to predict test data
+error.ridge = mean((ridge_pred - y_testSet)^2) # Calculate test MSE
+error.ridge
+```
+Now the MSE is 8.112662. This is the error of computation for the test model that we consider.
+
+
+
+Question 13 : Check that on this dataset, the aggregation models with trees are
+not very strong. (Explain the meaning of an "agregation" method).
+
+An aggregation method is any process in which information is gathered and expressed in a summary form, for purposes such as statistical analysis ; it is to get more information about particular groups based on specific variables such as age, profession, or income, etc.
+
+```{r}
+#Building the decision tree
+model.rpart <- rpart(trainSet$sucre~., trainSet)
+
+plot(model.rpart)
+text(model.rpart, pretty = 0)
+```
+
+
+Building the prune of the tree
+```{r}
+puneTree = prune(model.rpart, cp=0.16)
+
+#plot the prune
+plot(puneTree, uniform = T)
+text(puneTree)
+```
+
+
+We realise that the tree is not very strong to get a good intrepretation.
+
+
+Question 15 : Use the Lasso estimator using the lars method
+
+ 
+```{r}
+model.lasso = lars(as.matrix(trainSet[,2:701]), as.matrix(trainSet$sucre), type='lasso')
+plot(model.lasso)
+```
+
+
+
+We now ask whether the lasso can yield either a more accurate or a more interpretable model than ridge regression. In order to fit a lasso model, we once again use the glmnet() function; however, this time we use the argument alpha=1. Other than that change, we proceed just as we did in fitting a ridge model:
+
+```{r}
+set.seed(15)
+model.lasso = glmnet(x_trainSet, 
+                   y_trainSet, 
+                   alpha = 1, 
+                   lambda = grid) # Fit lasso model on training data
+
+plot(model.lasso)    # Draw plot of coefficients
+```
+
+Notice that in the coefficient plot that depending on the choice of tuning parameter, some of the coefficients are exactly equal to zero. We now perform cross-validation and compute the associated test error:
+
+
+```{r}
+set.seed(2)
+cv.out = cv.glmnet(x_trainSet, y_trainSet, alpha = 1) # Fit lasso model on training data
+plot(cv.out) # Draw plot of training MSE as a function of lambda
+```
+
+
+Now, we select lamda that minimizes training MSE, Use best lambda to predict test data and compute the MSE for the test set.
+
+```{r}
+set.seed(2)
+bestlamLasso = cv.out$lambda.min  #select lamda that minimizes training MSE
+bestlamLasso
+```
+The value of the best lambda is   0.02027344.
+
+
+```{r}
+set.seed(2)
+bestlamLasso = cv.out$lambda.min  #select lamda that minimizes training MSE
+lasso_pred = predict(model.lasso, s = bestlamLasso, newx = x_testSet) # Use best lambda to predict test data
+error.lasso = mean((lasso_pred - y_testSet)^2) # Calculate test MSE
+error.lasso 
+```
+The error for the test set is 2.719269.
+
+
+
+
+
+Question 16 : What is a deep learning neural network method ? Explain the
+theoretical difficulties and the practical ones. Use a neural network method
+with several hidden layers.
+
+
+A neural network is a model characterized by an activation function, which is used by interconnected information processing units to transform input into output. A neural network has always been compared to human nervous system. Information in passed through interconnected units analogous to information passage through neurons in humans. The first layer of the neural network receives the raw input, processes it and passes the processed information to the hidden layers. The hidden layer passes the information to the last layer, which produces the output. The advantage of neural network is that it is adaptive in nature. It learns from the information provided, i.e. trains itself from the data, which has a known outcome and optimizes its weights for a better prediction in situations with unknown outcome. 
+
+
+Neural Network Output
+We star with  hidden layers equal to 3
+We then run our neural network and generate our parameters:
+
+```{r}
+library(neuralnet)
+model3.nn <- neuralnet(y_trainSet~. ,data=trainSet, hidden=3, linear.output=TRUE, threshold=0.01)
+model3.nn$result.matrix[1:5,] # the value of the first 5 parameters
+
+```
+
+
+We plot our generated neural network.
+```{r}
+plot(model3.nn)
+```
+
+Model Validation
+Then, we validate (or test the accuracy of our model) by comparing the estimated sucre spend yielded from the neural network to the actual spend as reported in the test output:
+
+```{r}
+set.seed(2)
+predict_testSet = compute(model3.nn, testSet)
+predict_testSet = (predict_testSet$net.result * (max(cookNorm$sucre) - min(cookNorm$sucre))) + min(cookNorm$sucre)
+```
+
+
+
+# Calculate Root Mean Square Error (RMSE) for hidden = 3
+
+
+```{r}
+RMSE3.NN = (sum((cookNorm - predict_testSet)^2) / nrow(testSet)) ^ 0.5
+RMSE3.NN
+```
+For hidden = 8:
+
+```{r}
+model.nn <- neuralnet(y_trainSet~. ,data=trainSet, hidden=8, linear.output=TRUE, threshold=0.01)
+
+predict_testSet = compute(model.nn, testSet)
+predict_testSet = (predict_testSet$net.result * (max(cookNorm$sucre) - min(cookNorm$sucre))) + min(cookNorm$sucre)
+RMSE8.NN = (sum((cookNorm - predict_testSet)^2) / nrow(testSet)) ^ 0.5
+RMSE8.NN
+```
+
+Similar as for hidden = 3;
+
+For hidden=10
+
+
+```{r}
+model.nn <- neuralnet(y_trainSet~. ,data=trainSet, hidden=7, linear.output=TRUE, threshold=0.01)
+predict_testSet = compute(model.nn, testSet)
+predict_testSet = (predict_testSet$net.result * (max(cookNorm$sucre) - min(cookNorm$sucre))) + min(cookNorm$sucre)
+RMSE7.NN = (sum((cookNorm - predict_testSet)^2) / nrow(testSet)) ^ 0.5
+RMSE7.NN
+```
+
+
+hidden=15:
+
+```{r}
+set.seed(17)
+model.nn <- neuralnet(y_trainSet~. ,data=trainSet, hidden=15, linear.output=TRUE, threshold=0.01)
+predict_testSet = compute(model.nn, testSet)
+predict_testSet = (predict_testSet$net.result * (max(cookNorm$sucre) - min(cookNorm$sucre))) + min(cookNorm$sucre)
+RMSE15.NN = (sum((cookNorm - predict_testSet)^2) / nrow(testSet)) ^ 0.5
+RMSE15.NN
+```
+
+hidden=20
+
+```{r}
+set.seed(44)
+model.nn <- neuralnet(y_trainSet~. ,data=trainSet, hidden=20, linear.output=TRUE, threshold=0.01)
+predict_testSet = compute(model.nn, testSet)
+predict_testSet = (predict_testSet$net.result * (max(cookNorm$sucre) - min(cookNorm$sucre))) + min(cookNorm$sucre)
+RMSE20.NN = (sum((cookNorm - predict_testSet)^2) / nrow(testSet)) ^ 0.5
+RMSE20.NN
+```
+
+
+
+Question 17 : Provide a summary of the results, what are the good methods,
+what are the useful variables ?
+
+Comparing the value of the first 19 coefficient of the two method.
+
+For Ridge method.
+
+```{r}
+coef.ridge = predict(model.ridge, type = "coefficients", s = bestlam)[1:20,]
+coef.ridge
+length(coef.ridge[coef.ridge != 0]) # Display the number of  non-zero coefficients
+```
+None of them is equal to zero.
+
+While the lasso has a substantial advantage over ridge regression in that the resulting coefficient estimates are sparse. Here we see that 14 of the 19 coefficient estimates are exactly zero:
+
+```{r}
+coef.lasso = predict(model.lasso, s = bestlamLasso, type = "coefficients",newx = x_testSet)[1:20,] 
+coef.lasso
+length(coef.lasso[coef.lasso != 0]) # Display the number of  non-zero coefficients
+```
+Most of them are 0.
+
+
+Concerning the error of computation for the test set:
+
+
+```{r}
+ModelErrorName = c("error.lasso", "error.ridge", "RMSE3.NN", "RMSE8.NN", "RMSE7.NN", "RMSE15.NN", "RMSE20.NN")
+
+ModelErrorValue  = c(error.lasso, error.ridge, RMSE3.NN, RMSE8.NN, RMSE7.NN, RMSE15.NN, RMSE20.NN)
+dferror = cbind.data.frame(ModelErrorName,ModelErrorValue )
+dferror
+
+```
+In this table, RMSEj.NN is the MSE computed with the neural network method usin hidden=j.
+The lasso method has the lowest value for the error. so it is best method among all them. The rigde method is the second one, then the neural network method with different hidden values follows.
+
+
+The most important variables:
+To find them, we use the lasso method as its error was the minimal one. These are all non zero variables.
+There are: "X1" , "X4" , "X8"  and  "X11"
+```{r}
+coef.lasso = predict(model.lasso, s = bestlamLasso, type = "coefficients",newx = x_testSet)[1:20,] 
+coef.lasso
+length(coef.lasso[coef.lasso != 0]) # Display the number of  non-zero coefficients
+# model.lasso
+# c<-coef(model.lasso,s='lambda.min',exact=TRUE)
+a = coef.lasso[coef.lasso != 0]
+names(a)[2:length(a)]
+
+
+```
